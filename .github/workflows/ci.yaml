@@ -461,32 +461,33 @@ jobs:
           # Encode incusbox-init as base64 for cloud-init write_files
           init_b64="$(base64 -w0 incusbox/incusbox-init)"
 
-          # Write cloud-init YAML at column 0 — indented heredocs produce
-          # leading spaces that break YAML parsing inside Incus.
-          cat > /tmp/cloud-init.yaml << EOF
-#cloud-config
-write_files:
-- path: /etc/incusbox-container
-  permissions: '0644'
-  content: |
-    INCUSBOX_CONTAINER_NAME=ci-debian
-    INCUSBOX_HOST_USER=${user}
-    INCUSBOX_HOST_UID=${uid}
-    INCUSBOX_HOST_GID=${gid}
-    INCUSBOX_HOST_HOME=${home}
-    INCUSBOX_CONTAINER_HOME=${home}
-    INCUSBOX_ADDITIONAL_PACKAGES=
-    INCUSBOX_PRE_INIT_HOOK=
-    INCUSBOX_INIT_HOOK=
-    INCUSBOX_INIT=0
-    INCUSBOX_NVIDIA=0
-- path: /usr/local/bin/incusbox-init
-  permissions: '0755'
-  encoding: b64
-  content: ${init_b64}
-runcmd:
-- [sh, /usr/local/bin/incusbox-init]
-EOF
+          # Build cloud-init YAML using printf — avoids heredoc indentation
+          # issues where leading spaces from YAML block indentation corrupt
+          # the cloud-config content parsed by Incus.
+          {
+            printf '#cloud-config\n'
+            printf 'write_files:\n'
+            printf '- path: /etc/incusbox-container\n'
+            printf '  permissions: '"'"'0644'"'"'\n'
+            printf '  content: |\n'
+            printf '    INCUSBOX_CONTAINER_NAME=ci-debian\n'
+            printf '    INCUSBOX_HOST_USER=%s\n'      "${user}"
+            printf '    INCUSBOX_HOST_UID=%s\n'       "${uid}"
+            printf '    INCUSBOX_HOST_GID=%s\n'       "${gid}"
+            printf '    INCUSBOX_HOST_HOME=%s\n'      "${home}"
+            printf '    INCUSBOX_CONTAINER_HOME=%s\n' "${home}"
+            printf '    INCUSBOX_ADDITIONAL_PACKAGES=\n'
+            printf '    INCUSBOX_PRE_INIT_HOOK=\n'
+            printf '    INCUSBOX_INIT_HOOK=\n'
+            printf '    INCUSBOX_INIT=0\n'
+            printf '    INCUSBOX_NVIDIA=0\n'
+            printf '- path: /usr/local/bin/incusbox-init\n'
+            printf '  permissions: '"'"'0755'"'"'\n'
+            printf '  encoding: b64\n'
+            printf '  content: %s\n' "${init_b64}"
+            printf 'runcmd:\n'
+            printf '- [sh, /usr/local/bin/incusbox-init]\n'
+          } > /tmp/cloud-init.yaml
 
           # Write raw.idmap to a temp file — avoids shell quoting issues with
           # embedded newlines when passing multiline values to incus config set.
