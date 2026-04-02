@@ -238,11 +238,23 @@ setup_btrfs_home() {
 # ── OCI remote registration ───────────────────────────────────────────────────
 # If the image looks like an OCI reference (contains a registry hostname or
 # docker.io shorthand), ensure the OCI remote is registered with Incus.
+#
+# Incus native remotes (images:, ubuntu:, ubuntu-daily:, local:) are NOT OCI.
+# OCI references are either explicit docker:/ghcr:/quay: prefixes, or
+# registry hostnames containing a dot (e.g. docker.io/..., ghcr.io/...).
 is_oci_image() {
     case "${container_image}" in
-        docker:*|docker.io/*|ghcr.io/*|quay.io/*|registry.*)
+        # Explicit Incus native remotes — never OCI
+        images:*|ubuntu:*|ubuntu-daily:*|local:*|tumbleweed:*)
+            return 1 ;;
+        # Explicit OCI remote prefixes registered by incusbox
+        docker:*|ghcr:*|quay:*)
             return 0 ;;
-        *:*/*) # e.g. registry.fedoraproject.org/fedora-toolbox:latest
+        # Full registry hostnames (contain a dot before the first slash)
+        docker.io/*|ghcr.io/*|quay.io/*|registry.*)
+            return 0 ;;
+        # Generic: hostname with dot followed by path (e.g. registry.example.com/img)
+        *.*/*:*)
             return 0 ;;
         *)
             return 1 ;;
