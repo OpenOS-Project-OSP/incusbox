@@ -237,6 +237,6 @@ export_systemd_service() {
 }
 
 # ── dispatch ──────────────────────────────────────────────────────────────────
-[ -n "${export_bin}" ]     && export_binary "${export_bin}"
-[ -n "${export_app}" ]     && export_application "${export_app}"
-[ -n "${export_service}" ] && export_systemd_service "${export_service}"
+[ -z "${export_bin}" ]     || export_binary "${export_bin}"
+[ -z "${export_app}" ]     || export_application "${export_app}"
+[ -z "${export_service}" ] || export_systemd_service "${export_service}"
