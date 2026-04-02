@@ -118,20 +118,36 @@ core_packages() {
 setup_user() {
     log "Setting up user ${INCUSBOX_HOST_USER} (uid=${INCUSBOX_HOST_UID} gid=${INCUSBOX_HOST_GID})"
 
-    # Create group if it doesn't exist
-    if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
-        groupadd --gid "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
-    fi
-
-    # Create user if it doesn't exist
-    if ! getent passwd "${INCUSBOX_HOST_USER}" >/dev/null 2>&1; then
-        useradd \
-            --uid "${INCUSBOX_HOST_UID}" \
-            --gid "${INCUSBOX_HOST_GID}" \
-            --home-dir "${INCUSBOX_CONTAINER_HOME}" \
-            --no-create-home \
-            --shell /bin/bash \
-            "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+    # Detect whether we have shadow-utils (useradd/groupadd) or BusyBox
+    # (adduser/addgroup). Alpine uses BusyBox; most other distros use shadow.
+    if command -v useradd >/dev/null 2>&1; then
+        # shadow-utils path (Debian, Fedora, Arch, openSUSE, Void, Gentoo)
+        if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
+            groupadd --gid "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        fi
+        if ! getent passwd "${INCUSBOX_HOST_USER}" >/dev/null 2>&1; then
+            useradd \
+                --uid "${INCUSBOX_HOST_UID}" \
+                --gid "${INCUSBOX_HOST_GID}" \
+                --home-dir "${INCUSBOX_CONTAINER_HOME}" \
+                --no-create-home \
+                --shell /bin/bash \
+                "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        fi
+    else
+        # BusyBox path (Alpine)
+        if ! getent group "${INCUSBOX_HOST_GID}" >/dev/null 2>&1; then
+            addgroup -g "${INCUSBOX_HOST_GID}" "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        fi
+        if ! getent passwd "${INCUSBOX_HOST_USER}" >/dev/null 2>&1; then
+            adduser \
+                -u "${INCUSBOX_HOST_UID}" \
+                -G "${INCUSBOX_HOST_USER}" \
+                -h "${INCUSBOX_CONTAINER_HOME}" \
+                -s /bin/sh \
+                -D \
+                "${INCUSBOX_HOST_USER}" 2>/dev/null || true
+        fi
     fi
 
     # Ensure home directory exists and is owned correctly
@@ -222,35 +238,47 @@ setup_init_system() {
 # Write a minimal .bashrc / .profile addition so the container feels like
 # a normal login shell with the right environment.
 setup_shell_integration() {
-    local rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
-    local profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
-
     # Only write if the user's home is writable
     [ -w "${INCUSBOX_CONTAINER_HOME}" ] || return 0
 
-    # Append incusbox env block if not already present
-    if ! grep -q 'INCUSBOX' "${rc_file}" 2>/dev/null; then
-        cat >> "${rc_file}" <<'RCBLOCK'
+    local profile_file="${INCUSBOX_CONTAINER_HOME}/.profile"
+
+    # Write a POSIX .profile that works on all shells (bash, sh, ash)
+    if ! grep -q 'INCUSBOX' "${profile_file}" 2>/dev/null; then
+        cat >> "${profile_file}" <<'PROFBLOCK'
 
 # incusbox environment
 export INCUSBOX=1
 export CONTAINER_ID="${CONTAINER_ID:-incusbox}"
-# Make host executables available via distrobox-host-exec
 alias host-exec='incusbox-host-exec'
-# Ensure terminfo from host is available
 export TERMINFO_DIRS="${TERMINFO_DIRS:-/usr/share/terminfo:/run/host/usr/share/terminfo}"
-RCBLOCK
-    fi
-
-    # Ensure .profile sources .bashrc for login shells
-    if ! grep -q '.bashrc' "${profile_file}" 2>/dev/null; then
-        cat >> "${profile_file}" <<'PROFBLOCK'
-[ -f "${HOME}/.bashrc" ] && . "${HOME}/.bashrc"
 PROFBLOCK
     fi
 
+    # Also write .bashrc if bash is available
+    if command -v bash >/dev/null 2>&1; then
+        local rc_file="${INCUSBOX_CONTAINER_HOME}/.bashrc"
+        if ! grep -q 'INCUSBOX' "${rc_file}" 2>/dev/null; then
+            cat >> "${rc_file}" <<'RCBLOCK'
+
+# incusbox environment
+export INCUSBOX=1
+export CONTAINER_ID="${CONTAINER_ID:-incusbox}"
+alias host-exec='incusbox-host-exec'
+export TERMINFO_DIRS="${TERMINFO_DIRS:-/usr/share/terminfo:/run/host/usr/share/terminfo}"
+RCBLOCK
+        fi
+        # Ensure .profile sources .bashrc for login shells
+        if ! grep -q '.bashrc' "${profile_file}" 2>/dev/null; then
+            printf '[ -f "${HOME}/.bashrc" ] && . "${HOME}/.bashrc"\n' \
+                >> "${profile_file}"
+        fi
+        chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" \
+            "${rc_file}" 2>/dev/null || true
+    fi
+
     chown "${INCUSBOX_HOST_UID}:${INCUSBOX_HOST_GID}" \
-        "${rc_file}" "${profile_file}" 2>/dev/null || true
+        "${profile_file}" 2>/dev/null || true
 }
 
 # ── XDG dirs ──────────────────────────────────────────────────────────────────
