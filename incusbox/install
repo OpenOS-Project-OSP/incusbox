@@ -12,6 +12,7 @@ version="0.1.0"
 prefix=""
 user_install=0
 verbose=0
+update=0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 log()  { printf '%s\n' "$*"; }
@@ -28,6 +29,8 @@ Usage:
 Options:
   --prefix PATH    Install prefix (default: /usr/local for root, ~/.local for user)
   --user           Install to ~/.local (no root required)
+  --update         Re-install over an existing installation; also updates
+                   already-registered Incus profiles to the current version
   -v, --verbose    Show verbose output
   -h, --help       Show this help
 
@@ -35,6 +38,7 @@ Examples:
   sudo ./install                    # system-wide install to /usr/local
   ./install --user                  # user install to ~/.local
   ./install --prefix /opt/incusbox  # custom prefix
+  sudo ./install --update           # update an existing installation
 EOF
 }
 
@@ -42,6 +46,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --prefix)    prefix="$2";   shift 2 ;;
         --user)      user_install=1; shift ;;
+        --update)    update=1;       shift ;;
         -v|--verbose) verbose=1;    shift ;;
         -h|--help)   show_help; exit 0 ;;
         *) die "Unknown option: $1" ;;
@@ -165,8 +170,12 @@ if command -v incus >/dev/null 2>&1; then
             incus profile create "${profile_name}" < "${profile_yaml}" 2>/dev/null && \
                 info "Created Incus profile: ${profile_name}" || \
                 log "Warning: failed to create profile ${profile_name}"
+        elif [ "${update}" -eq 1 ]; then
+            incus profile edit "${profile_name}" < "${profile_yaml}" 2>/dev/null && \
+                info "Updated Incus profile: ${profile_name}" || \
+                log "Warning: failed to update profile ${profile_name}"
         else
-            info "Profile ${profile_name} already exists, skipping"
+            info "Profile ${profile_name} already exists (use --update to overwrite)"
         fi
     done
 else
