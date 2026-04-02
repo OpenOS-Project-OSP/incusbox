@@ -467,7 +467,7 @@ jobs:
           {
             printf '#cloud-config\n'
             printf 'write_files:\n'
-            printf '- path: /etc/incusbox-container\n'
+            printf '%s\n' '- path: /etc/incusbox-container'
             printf '  permissions: '"'"'0644'"'"'\n'
             printf '  content: |\n'
             printf '    INCUSBOX_CONTAINER_NAME=ci-debian\n'
@@ -481,12 +481,12 @@ jobs:
             printf '    INCUSBOX_INIT_HOOK=\n'
             printf '    INCUSBOX_INIT=0\n'
             printf '    INCUSBOX_NVIDIA=0\n'
-            printf '- path: /usr/local/bin/incusbox-init\n'
+            printf '%s\n' '- path: /usr/local/bin/incusbox-init'
             printf '  permissions: '"'"'0755'"'"'\n'
             printf '  encoding: b64\n'
             printf '  content: %s\n' "${init_b64}"
             printf 'runcmd:\n'
-            printf '- [sh, /usr/local/bin/incusbox-init]\n'
+            printf '%s\n' '- [sh, /usr/local/bin/incusbox-init]'
           } > /tmp/cloud-init.yaml
 
           # Write raw.idmap to a temp file — avoids shell quoting issues with
