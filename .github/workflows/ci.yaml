@@ -378,28 +378,23 @@ jobs:
 
       - name: incusbox-export (binary)
         run: |
-          # incusbox-export runs INSIDE the container and writes a wrapper to the
-          # bind-mounted home directory (~/.local/bin on the host).
-          # Ensure ~/.local/bin exists on the host so the bind-mount is writable.
-          mkdir -p "${HOME}/.local/bin"
           # Push the script into the container (same reason as host-exec above:
           # /run/host/usr/local is not visible via the non-recursive source=/ mount).
           sudo incus file push incusbox/incusbox-export \
             ci-test/usr/local/bin/incusbox-export --mode 0755
-          # Run as root but override HOME so the wrapper lands in the
-          # bind-mounted home directory. Root can write there regardless of
-          # uid mapping (GHA runners don't support idmapped mounts).
-          sudo incus exec --env "HOME=${HOME}" ci-test -- \
+          # Export to /tmp/test-bin inside the container — avoids uid-mapping
+          # issues with the bind-mounted home directory on unprivileged containers.
+          sudo incus exec ci-test -- mkdir -p /tmp/test-bin
+          sudo incus exec --env "HOME=/tmp/test-home" ci-test -- \
             /usr/local/bin/incusbox-export --bin /bin/sh
-          wrapper="${HOME}/.local/bin/sh"
-          [ -f "${wrapper}" ] || { echo "FAIL: exported wrapper not found at ${wrapper}"; exit 1; }
+          # Pull the wrapper out and verify it on the host
+          sudo incus file pull ci-test/tmp/test-home/.local/bin/sh /tmp/sh-wrapper
           echo "Wrapper contents:"
-          cat "${wrapper}"
-          grep -q "incusbox enter" "${wrapper}" \
+          cat /tmp/sh-wrapper
+          grep -q "incusbox enter" /tmp/sh-wrapper \
             || { echo "FAIL: wrapper does not call incusbox enter"; exit 1; }
           echo "OK: incusbox-export created wrapper"
-          # Clean up
-          rm -f "${wrapper}"
+          rm -f /tmp/sh-wrapper
 
       - name: incusbox stop
         run: |
