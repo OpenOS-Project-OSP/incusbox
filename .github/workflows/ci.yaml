@@ -497,15 +497,13 @@ jobs:
 
           # Create (not launch) so NIC and raw.idmap are set before first boot —
           # cloud-init needs the NIC available at startup.
-          # Override raw.lxc inline (same pattern as the base Alpine job) so the
-          # profile value doesn't conflict with the container-level value.
+          # Use default profile only — incusbox-base adds raw.lxc directives that
+          # require AppArmor unconfined, which causes forkstart failures in CI.
+          # This job tests the cloud-init path, not the full incusbox profile stack.
           sudo incus init local:ci-alpine-cloud ci-alpine-cloud \
-            --profile incusbox-base \
+            --profile default \
             --storage default \
             --config user.manager=incusbox \
-            --config "raw.lxc=lxc.apparmor.profile = unconfined
-          lxc.cap.drop =
-          lxc.cgroup.devices.allow = a" \
             --config "cloud-init.user-data=$(cat /tmp/cloud-init.yaml)"
 
           sudo incus config set ci-alpine-cloud "raw.idmap=$(cat /tmp/idmap.txt)"
