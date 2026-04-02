@@ -40,13 +40,14 @@ case "$1" in
 esac
 
 # ── find the host PID 1 to nsenter into ──────────────────────────────────────
-# The host's PID 1 is visible from inside the container because we share
-# the PID namespace (lxc.namespace.share.pid = 1 in raw.lxc).
-# If PID namespace is unshared, fall back to /run/host chroot approach.
+# nsenter requires CAP_SYS_PTRACE to attach to another process's namespaces.
+# Standard Incus containers don't have this capability, so we check whether
+# /proc/1/ns/mnt is actually readable before attempting nsenter.
+# If not readable, fall through to the chroot /run/host fallback.
 
 HOST_PID1_NS="/proc/1/ns"
 
-if [ -d "${HOST_PID1_NS}" ]; then
+if [ -r "${HOST_PID1_NS}/mnt" ]; then
     # Use nsenter to run in host namespaces.
     # -m: mount namespace  -u: UTS  -i: IPC  -n: network  -p: PID
     # We do NOT enter the user namespace (-U) as that would drop privileges.
@@ -58,12 +59,11 @@ if [ -d "${HOST_PID1_NS}" ]; then
         --pid="${HOST_PID1_NS}/pid" \
         --target=1 \
         -- "$@"
-else
-    # Fallback: chroot into /run/host and exec there.
-    # This works when PID namespace is unshared but /run/host is mounted.
-    if [ ! -d /run/host ]; then
-        printf >&2 'incusbox-host-exec: /run/host not found — is the host root mounted?\n'
-        exit 1
-    fi
-    exec chroot /run/host "$@"
 fi
+
+# Fallback: chroot into /run/host and exec there.
+if [ ! -d /run/host ]; then
+    printf >&2 'incusbox-host-exec: /run/host not found — is the host root mounted?\n'
+    exit 1
+fi
+exec chroot /run/host "$@"

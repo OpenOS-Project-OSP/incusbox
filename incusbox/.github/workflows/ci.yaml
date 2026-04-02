@@ -1,0 +1,575 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  # ── static analysis ─────────────────────────────────────────────────────────
+  syntax:
+    name: Shell syntax (bash -n)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check syntax of all incusbox scripts
+        run: |
+          failed=0
+          for f in incusbox/incusbox incusbox/incusbox-*; do
+            [ -f "$f" ] || continue
+            if bash -n "$f"; then
+              echo "OK:   $f"
+            else
+              echo "FAIL: $f"
+              failed=1
+            fi
+          done
+          exit $failed
+
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck on all incusbox scripts
+        run: |
+          failed=0
+          for f in incusbox/incusbox incusbox/incusbox-*; do
+            [ -f "$f" ] || continue
+            # SC1090: can't follow non-constant source — expected (config files)
+            # SC1091: not following sourced file — expected (config files)
+            # SC2034: unused variable — some vars set for sourcing by config
+            # SC2154: referenced but not assigned — vars come from sourced config
+            # Use the shebang to determine shell dialect
+            shell="bash"
+            head -1 "$f" | grep -q '#!/bin/sh' && shell="sh"
+            if shellcheck \
+                --shell="${shell}" \
+                --severity=warning \
+                --exclude=SC1090,SC1091,SC2034,SC2154,SC3043 \
+                "$f"; then
+              echo "OK:   $f"
+            else
+              echo "FAIL: $f"
+              failed=1
+            fi
+          done
+          exit $failed
+
+  install-dry-run:
+    name: Install script (dry run)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify install script syntax
+        run: bash -n incusbox/install && echo "Install script syntax OK"
+
+      - name: Run install to ~/.local (no incus daemon needed)
+        run: |
+          bash incusbox/install --user --verbose
+          # Verify all executables landed correctly
+          for exe in incusbox incusbox-create incusbox-enter incusbox-init \
+                     incusbox-export incusbox-host-exec incusbox-list \
+                     incusbox-rm incusbox-stop incusbox-upgrade \
+                     incusbox-assemble incusbox-setup-rootless; do
+            if [ -x "${HOME}/.local/bin/${exe}" ]; then
+              echo "OK:   ~/.local/bin/${exe}"
+            else
+              echo "FAIL: ~/.local/bin/${exe} not found or not executable"
+              exit 1
+            fi
+          done
+          # Verify completions landed
+          for comp in \
+              "${HOME}/.local/share/bash-completion/completions/incusbox" \
+              "${HOME}/.local/share/zsh/completions/_incusbox"; do
+            if [ -f "${comp}" ]; then
+              echo "OK:   ${comp}"
+            else
+              echo "FAIL: ${comp} not found"
+              exit 1
+            fi
+          done
+          # Verify profiles landed
+          for profile in incusbox-base incusbox-init incusbox-nvidia \
+                         incusbox-unshare-net incusbox-gui incusbox-rootless; do
+            if [ -f "${HOME}/.local/share/incusbox/profiles/${profile}.yaml" ]; then
+              echo "OK:   profile ${profile}.yaml"
+            else
+              echo "FAIL: profile ${profile}.yaml not found"
+              exit 1
+            fi
+          done
+          # Verify man pages landed
+          for page in incusbox incusbox-create incusbox-enter \
+                      incusbox-init incusbox-assemble; do
+            if [ -f "${HOME}/.local/share/man/man1/${page}.1" ]; then
+              echo "OK:   man1/${page}.1"
+            else
+              echo "FAIL: man1/${page}.1 not found"
+              exit 1
+            fi
+          done
+          # Verify --update re-runs cleanly over an existing installation
+          bash incusbox/install --user --update --verbose
+          echo "OK: --update completed without error"
+
+  profile-yaml:
+    name: Validate profile YAML
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Validate all profile YAML files
+        run: |
+          failed=0
+          for f in incusbox/profiles/*.yaml; do
+            [ -f "$f" ] || continue
+            if yq eval '.' "$f" > /dev/null 2>&1; then
+              echo "OK:   $f"
+            else
+              echo "FAIL: $f"
+              yq eval '.' "$f" || true
+              failed=1
+            fi
+          done
+          exit $failed
+
+  assemble-parse:
+    name: incusbox-assemble YAML parser
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test YAML parser against example file
+        run: |
+          # Extract and run just the parse_yaml_containers function in isolation.
+          # Sourcing the full script would trigger show_help+exit due to missing
+          # --file argument. Instead we copy the function body directly.
+          bash -c '
+            # Inline the parser function from the script
+            eval "$(sed -n "/^parse_yaml_containers()/,/^}/p" incusbox/incusbox-assemble)"
+            output="$(parse_yaml_containers incusbox/docs/example-assemble.yaml)"
+            echo "${output}"
+            count="$(echo "${output}" | grep "^CONTAINER_COUNT=" | cut -d= -f2)"
+            echo "Parsed ${count} containers"
+            [ "${count}" -ge 1 ] || { echo "FAIL: no containers parsed"; exit 1; }
+            echo "OK: parser produced output for all containers"
+          '
+
+  # ── integration tests (live Incus daemon) ───────────────────────────────────
+  # Runs on ubuntu-24.04 with KVM available. Installs Incus from the upstream
+  # snap, initialises it with a minimal config, then exercises the full
+  # create → enter → list → rm lifecycle using a lightweight Incus native image
+  # (no OCI pull needed — avoids skopeo dependency in CI).
+  integration:
+    name: Integration (live Incus)
+    runs-on: ubuntu-24.04
+    # Only run on push to main or PRs — skip for draft PRs to save minutes
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Incus
+        run: |
+          sudo apt-get update -q
+          # incus-base was renamed/merged into incus in recent Ubuntu packages
+          sudo apt-get install -y incus
+          # Add runner user to incus-admin group so sudo is not needed for incus
+          sudo adduser "$USER" incus-admin || true
+          sudo adduser "$USER" incus || true
+
+      - name: Initialise Incus (minimal preseed)
+        run: |
+          # Write preseed to a temp file to avoid heredoc YAML parsing issues
+          cat > /tmp/incus-preseed.yaml << 'EOF'
+          config: {}
+          networks:
+          - name: incusbr0
+            type: bridge
+            config:
+              ipv4.address: 10.211.55.1/24
+              ipv4.nat: "true"
+              ipv6.address: none
+          storage_pools:
+          - name: default
+            driver: dir
+          profiles:
+          - name: default
+            devices:
+              root:
+                path: /
+                pool: default
+                type: disk
+              eth0:
+                name: eth0
+                nictype: bridged
+                parent: incusbr0
+                type: nic
+          EOF
+          sudo incus admin init --preseed < /tmp/incus-preseed.yaml
+
+      - name: Install incusbox
+        run: |
+          sudo bash incusbox/install --prefix /usr/local --verbose
+
+      - name: Register incusbox profiles
+        run: |
+          for yaml in incusbox/profiles/*.yaml; do
+            name="$(basename "${yaml}" .yaml)"
+            sudo incus profile show "${name}" >/dev/null 2>&1 && continue
+            sudo incus profile create "${name}" < "${yaml}"
+            echo "Created profile: ${name}"
+          done
+
+      - name: Add Incus remotes and pull test image
+        run: |
+          # images: remote is already present on this Incus install (confirmed)
+          sudo incus remote list
+          # List available Alpine aliases to find the correct format
+          sudo incus image list images: --format csv 2>/dev/null \
+            | grep -i alpine | head -10 || true
+          # Pull the first available Alpine image into local cache
+          # Try common alias formats in order
+          pulled=0
+          for alias in "alpine/3.20" "alpine/3.19" "alpine/edge" "alpine/3.18"; do
+            if sudo incus image copy "images:${alias}" local: \
+                --alias ci-alpine --auto-update=false 2>/dev/null; then
+              echo "Pulled: images:${alias}"
+              pulled=1
+              break
+            fi
+          done
+          if [ "${pulled}" -eq 0 ]; then
+            echo "Could not pull Alpine — listing available images for diagnosis"
+            sudo incus image list images: --format csv 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          sudo incus image list local: --format csv
+
+      - name: Create container with network (local cached image)
+        run: |
+          # Launch the container directly via incus (bypassing incusbox-create's
+          # background injection) so we can run incusbox-init synchronously with
+          # a NIC already attached for package installs.
+          sudo incus launch local:ci-alpine ci-test \
+            --profile incusbox-base \
+            --storage default \
+            --config user.manager=incusbox \
+            --config "user.incusbox.host_user=$(id -run)" \
+            --config "user.incusbox.host_uid=$(id -ru)" \
+            --config "user.incusbox.host_gid=$(id -rg)" \
+            --config "user.incusbox.host_home=${HOME}" \
+            --config "user.incusbox.container_home=${HOME}" \
+            --config user.incusbox.init=0 \
+            --config user.incusbox.nvidia=0 \
+            --config user.incusbox.unshare_groups=0 \
+            --config "raw.lxc=lxc.apparmor.profile = unconfined
+          lxc.cap.drop =
+          lxc.cgroup.devices.allow = a"
+          # Add a bridged NIC for network access (apk install needs internet)
+          sudo incus config device add ci-test eth0 nic \
+            nictype=bridged parent=incusbr0 name=eth0
+          # Add home bind-mount
+          sudo incus config device add ci-test home disk \
+            source="${HOME}" path="${HOME}"
+          echo "Container created"
+
+      - name: Verify container is running
+        run: |
+          status="$(sudo incus info ci-test | awk '/^Status:/ {print tolower($2)}')"
+          echo "Status: ${status}"
+          [ "${status}" = "running" ] || { echo "FAIL: expected running"; exit 1; }
+          # Wait for DHCP
+          sleep 8
+          sudo incus exec ci-test -- sh -c 'ip addr 2>/dev/null || true'
+          # Ensure DNS works inside the container
+          sudo incus exec ci-test -- sh -c \
+            'echo "nameserver 1.1.1.1" > /etc/resolv.conf' 2>/dev/null || true
+          # Verify network connectivity
+          sudo incus exec ci-test -- sh -c \
+            'ping -c1 -W3 1.1.1.1 >/dev/null 2>&1 && echo "network OK" || echo "network WARN: no ping"'
+
+      - name: Run incusbox-init synchronously
+        run: |
+          uid="$(id -ru)"
+          gid="$(id -rg)"
+          user="$(id -run)"
+          home="${HOME}"
+
+          # Write config to host temp file and push — avoids heredoc expansion
+          cfg="$(mktemp)"
+          printf 'INCUSBOX_CONTAINER_NAME=ci-test\n'         > "${cfg}"
+          printf 'INCUSBOX_HOST_USER=%s\n'      "${user}"   >> "${cfg}"
+          printf 'INCUSBOX_HOST_UID=%s\n'       "${uid}"    >> "${cfg}"
+          printf 'INCUSBOX_HOST_GID=%s\n'       "${gid}"    >> "${cfg}"
+          printf 'INCUSBOX_HOST_HOME=%s\n'      "${home}"   >> "${cfg}"
+          printf 'INCUSBOX_CONTAINER_HOME=%s\n' "${home}"   >> "${cfg}"
+          printf 'INCUSBOX_ADDITIONAL_PACKAGES=\n'          >> "${cfg}"
+          printf 'INCUSBOX_PRE_INIT_HOOK=\n'                >> "${cfg}"
+          printf 'INCUSBOX_INIT_HOOK=\n'                    >> "${cfg}"
+          printf 'INCUSBOX_INIT=0\n'                        >> "${cfg}"
+          printf 'INCUSBOX_NVIDIA=0\n'                      >> "${cfg}"
+          sudo incus file push "${cfg}" ci-test/etc/incusbox-container --mode 0644
+          rm -f "${cfg}"
+
+          # Ensure /usr/local/bin exists (Alpine omits it)
+          sudo incus exec ci-test -- sh -c 'mkdir -p /usr/local/bin'
+
+          # Push and run incusbox-init synchronously (#!/bin/sh — works on ash)
+          sudo incus file push incusbox/incusbox-init \
+            ci-test/usr/local/bin/incusbox-init --mode 0755
+          sudo incus exec ci-test -- sh /usr/local/bin/incusbox-init
+          echo "incusbox-init completed"
+
+      - name: Verify user exists inside container
+        run: |
+          user="$(id -run)"
+          # Use username not numeric UID — BusyBox id(1) doesn't accept numeric UIDs
+          result="$(sudo incus exec ci-test -- id "${user}" 2>/dev/null || true)"
+          echo "id output: ${result}"
+          [ -n "${result}" ] || { echo "FAIL: user ${user} not found in container"; exit 1; }
+          echo "OK: user exists"
+
+      - name: Verify home directory is bind-mounted
+        run: |
+          home="${HOME}"
+          result="$(sudo incus exec ci-test -- test -d "${home}" 2>/dev/null && echo "exists" || echo "missing")"
+          echo "Home ${home}: ${result}"
+          [ "${result}" = "exists" ] || { echo "FAIL: home not mounted"; exit 1; }
+
+      - name: incusbox list
+        run: |
+          sudo incusbox list --root
+          echo "OK: list completed"
+
+      - name: incusbox-host-exec
+        run: |
+          # Push the script into the container so we don't rely on /run/host
+          # (GHA runners mount /usr/local separately; a source=/ bind-mount is
+          # non-recursive and won't include it).
+          sudo incus file push incusbox/incusbox-host-exec \
+            ci-test/usr/local/bin/incusbox-host-exec --mode 0755
+          # chroot /run/host is the expected fallback path inside an Incus
+          # container (no CAP_SYS_PTRACE → nsenter is skipped).
+          # /run/host must be present for the script to work.
+          sudo incus config device add ci-test run-host disk \
+            source=/ path=/run/host readonly=true
+          # uname -s via chroot /run/host should return "Linux"
+          result="$(sudo incus exec ci-test -- \
+            /usr/local/bin/incusbox-host-exec uname -s 2>&1)"
+          echo "host-exec output: ${result}"
+          printf '%s' "${result}" | grep -q "Linux" \
+            || { echo "FAIL: expected Linux, got: ${result}"; exit 1; }
+          echo "OK: incusbox-host-exec works"
+
+      - name: incusbox-export (binary)
+        run: |
+          # incusbox-export runs INSIDE the container and writes a wrapper to the
+          # bind-mounted home directory (~/.local/bin on the host).
+          # Ensure ~/.local/bin exists on the host so the bind-mount is writable.
+          mkdir -p "${HOME}/.local/bin"
+          # Push the script into the container (same reason as host-exec above:
+          # /run/host/usr/local is not visible via the non-recursive source=/ mount).
+          sudo incus file push incusbox/incusbox-export \
+            ci-test/usr/local/bin/incusbox-export --mode 0755
+          sudo incus exec ci-test -- \
+            /usr/local/bin/incusbox-export --bin /usr/bin/git
+          wrapper="${HOME}/.local/bin/git"
+          [ -f "${wrapper}" ] || { echo "FAIL: exported wrapper not found at ${wrapper}"; exit 1; }
+          echo "Wrapper contents:"
+          cat "${wrapper}"
+          grep -q "incusbox enter" "${wrapper}" \
+            || { echo "FAIL: wrapper does not call incusbox enter"; exit 1; }
+          echo "OK: incusbox-export created wrapper"
+          # Clean up
+          rm -f "${wrapper}"
+
+      - name: incusbox stop
+        run: |
+          sudo incusbox stop --root ci-test
+          status="$(sudo incus info ci-test | awk '/^Status:/ {print tolower($2)}')"
+          echo "Status after stop: ${status}"
+          [ "${status}" = "stopped" ] || { echo "FAIL: expected stopped"; exit 1; }
+
+      - name: incusbox rm
+        run: |
+          sudo incusbox rm --root --yes ci-test
+          sudo incus info ci-test >/dev/null 2>&1 && \
+            { echo "FAIL: container still exists after rm"; exit 1; } || \
+            echo "OK: container removed"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== incus list ==="
+          sudo incus list || true
+          echo "=== incus info ci-test ==="
+          sudo incus info --show-log ci-test 2>/dev/null || true
+          echo "=== incusbox-init log ==="
+          sudo incus exec ci-test -- cat /var/log/incusbox-init.log 2>/dev/null || true
+          echo "=== cloud-init status ==="
+          sudo incus exec ci-test -- cloud-init status --long 2>/dev/null || true
+
+  # ── Debian/Ubuntu distro path ────────────────────────────────────────────────
+  # Tests the apt/useradd/groupadd branch of incusbox-init (Debian codepath).
+  # Uses the same exec-injection pattern as the base Alpine job — no cloud-init
+  # involved. This validates distro-agnosticism: Alpine uses apk+adduser,
+  # Debian uses apt+useradd; both must produce a working user environment.
+  integration-cloudinit:
+    name: Integration (Debian / exec-injection)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Incus
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y incus
+          sudo adduser "$USER" incus-admin || true
+          sudo adduser "$USER" incus || true
+
+      - name: Initialise Incus (minimal preseed)
+        run: |
+          cat > /tmp/incus-preseed.yaml << 'EOF'
+          config: {}
+          networks:
+          - name: incusbr0
+            type: bridge
+            config:
+              ipv4.address: 10.211.55.1/24
+              ipv4.nat: "true"
+              ipv6.address: none
+          storage_pools:
+          - name: default
+            driver: dir
+          profiles:
+          - name: default
+            devices:
+              root:
+                path: /
+                pool: default
+                type: disk
+              eth0:
+                name: eth0
+                nictype: bridged
+                parent: incusbr0
+                type: nic
+          EOF
+          sudo incus admin init --preseed < /tmp/incus-preseed.yaml
+
+      - name: Install incusbox
+        run: sudo bash incusbox/install --prefix /usr/local --verbose
+
+      - name: Register incusbox profiles
+        run: |
+          for yaml in incusbox/profiles/*.yaml; do
+            name="$(basename "${yaml}" .yaml)"
+            sudo incus profile show "${name}" >/dev/null 2>&1 && continue
+            sudo incus profile create "${name}" < "${yaml}"
+            echo "Created profile: ${name}"
+          done
+
+      - name: Pull Debian image
+        run: |
+          for alias in "debian/12" "debian/11"; do
+            if sudo incus image copy "images:${alias}" local: \
+                --alias ci-debian --auto-update=false 2>/dev/null; then
+              echo "Pulled: images:${alias}"
+              break
+            fi
+          done
+          sudo incus image list local: --format csv
+
+      - name: Launch Debian container and run incusbox-init
+        run: |
+          uid="$(id -ru)"
+          gid="$(id -rg)"
+          user="$(id -run)"
+
+          sudo incus launch local:ci-debian ci-debian \
+            --storage default \
+            --config user.manager=incusbox \
+            --config "raw.lxc=lxc.apparmor.profile = unconfined
+          lxc.cap.drop =
+          lxc.cgroup.devices.allow = a"
+          sudo incus config device add ci-debian eth0 nic \
+            nictype=bridged parent=incusbr0 name=eth0
+          sudo incus config device add ci-debian home disk \
+            source="${HOME}" path="${HOME}"
+
+          # Wait for container to be ready
+          sleep 5
+
+          # Write /etc/incusbox-container — incusbox-init reads config from this
+          # file, not from CLI args. Force IPv4 for apt via Acquire::ForceIPv4.
+          group="$(id -gn)"
+          {
+            printf 'INCUSBOX_HOST_USER=%s\n'      "${user}"
+            printf 'INCUSBOX_HOST_UID=%s\n'       "${uid}"
+            printf 'INCUSBOX_HOST_GID=%s\n'       "${gid}"
+            printf 'INCUSBOX_HOST_HOME=%s\n'      "${HOME}"
+            printf 'INCUSBOX_CONTAINER_HOME=%s\n' "${HOME}"
+            printf 'INCUSBOX_ADDITIONAL_PACKAGES=\n'
+            printf 'INCUSBOX_INIT=0\n'
+            printf 'INCUSBOX_NVIDIA=0\n'
+          } | sudo incus exec ci-debian -- sh -c 'cat > /etc/incusbox-container'
+          # Force apt to use IPv4 — container has no IPv6 route
+          sudo incus exec ci-debian -- sh -c \
+            'echo "Acquire::ForceIPv4 \"true\";" > /etc/apt/apt.conf.d/99force-ipv4'
+
+          # Inject and run incusbox-init (exec-injection path)
+          sudo incus exec ci-debian -- sh -c 'cat > /tmp/incusbox-init' \
+            < incusbox/incusbox-init
+          sudo incus exec ci-debian -- chmod +x /tmp/incusbox-init
+          sudo incus exec ci-debian -- sh /tmp/incusbox-init
+
+      - name: Verify user exists inside container
+        run: |
+          user="$(id -run)"
+          result="$(sudo incus exec ci-debian -- id "${user}" 2>/dev/null || true)"
+          echo "id output: ${result}"
+          [ -n "${result}" ] || { echo "FAIL: user ${user} not found"; exit 1; }
+          echo "OK: user exists"
+
+      - name: Verify home directory is bind-mounted
+        run: |
+          result="$(sudo incus exec ci-debian -- test -d "${HOME}" 2>/dev/null \
+            && echo "exists" || echo "missing")"
+          echo "Home ${HOME}: ${result}"
+          [ "${result}" = "exists" ] || { echo "FAIL: home not mounted"; exit 1; }
+
+      - name: Verify sudo works inside container
+        run: |
+          user="$(id -run)"
+          sudo incus exec ci-debian -- su - "${user}" -s /bin/sh -c "sudo id" \
+            && echo "OK: sudo works" || { echo "FAIL: sudo failed"; exit 1; }
+
+      - name: incusbox stop and rm
+        run: |
+          sudo incusbox stop --root ci-debian
+          sudo incusbox rm --root --yes ci-debian
+          sudo incus info ci-debian >/dev/null 2>&1 && \
+            { echo "FAIL: container still exists"; exit 1; } || echo "OK: removed"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== incus list ==="
+          sudo incus list || true
+          echo "=== incusbox-init log ==="
+          sudo incus exec ci-debian -- cat /var/log/incusbox-init.log 2>/dev/null || true
