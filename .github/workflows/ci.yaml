@@ -394,7 +394,7 @@ jobs:
           grep -q "incusbox enter" /tmp/sh-wrapper \
             || { echo "FAIL: wrapper does not call incusbox enter"; exit 1; }
           echo "OK: incusbox-export created wrapper"
-          rm -f /tmp/sh-wrapper
+          sudo rm -f /tmp/sh-wrapper
 
       - name: incusbox stop
         run: |
