@@ -285,7 +285,7 @@ jobs:
             nictype=bridged parent=incusbr0 name=eth0
           # Add home bind-mount
           sudo incus config device add ci-test home disk \
-            source="${HOME}" path="${HOME}"
+            source="${HOME}" path="${HOME}" shift=true
           echo "Container created"
 
       - name: Verify container is running
