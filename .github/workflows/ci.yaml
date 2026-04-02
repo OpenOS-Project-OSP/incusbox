@@ -495,20 +495,16 @@ jobs:
           printf 'uid %s %s\ngid %s %s\n' \
             "${uid}" "${uid}" "${gid}" "${gid}" > /tmp/idmap.txt
 
-          # Set raw.lxc and raw.idmap via temp files to avoid embedded newlines
-          # in --config values, which break YAML workflow parsing at column 0.
-          printf 'lxc.apparmor.profile = unconfined\nlxc.cap.drop =\nlxc.cgroup.devices.allow = a\n' \
-            > /tmp/raw-lxc.txt
-
-          # Create (not launch) so NIC and multiline configs are set before
-          # first boot — cloud-init needs the NIC available at startup.
+          # Create (not launch) so NIC and raw.idmap are set before first boot —
+          # cloud-init needs the NIC available at startup.
+          # raw.lxc is already provided by the incusbox-base profile; setting it
+          # again on the container causes LXC duplicate-directive errors.
           sudo incus init local:ci-alpine-cloud ci-alpine-cloud \
             --profile incusbox-base \
             --storage default \
             --config user.manager=incusbox \
             --config "cloud-init.user-data=$(cat /tmp/cloud-init.yaml)"
 
-          sudo incus config set ci-alpine-cloud "raw.lxc=$(cat /tmp/raw-lxc.txt)"
           sudo incus config set ci-alpine-cloud "raw.idmap=$(cat /tmp/idmap.txt)"
 
           sudo incus config device add ci-alpine-cloud eth0 nic \
