@@ -469,20 +469,28 @@ jobs:
           # Wait for container to be ready
           sleep 5
 
-          # Inject and run incusbox-init (exec-injection path, same as Alpine job)
+          # Write /etc/incusbox-container — incusbox-init reads config from this
+          # file, not from CLI args. Force IPv4 for apt via Acquire::ForceIPv4.
+          group="$(id -gn)"
+          {
+            printf 'INCUSBOX_HOST_USER=%s\n'      "${user}"
+            printf 'INCUSBOX_HOST_UID=%s\n'       "${uid}"
+            printf 'INCUSBOX_HOST_GID=%s\n'       "${gid}"
+            printf 'INCUSBOX_HOST_HOME=%s\n'      "${HOME}"
+            printf 'INCUSBOX_CONTAINER_HOME=%s\n' "${HOME}"
+            printf 'INCUSBOX_ADDITIONAL_PACKAGES=\n'
+            printf 'INCUSBOX_INIT=0\n'
+            printf 'INCUSBOX_NVIDIA=0\n'
+          } | sudo incus exec ci-debian -- sh -c 'cat > /etc/incusbox-container'
+          # Force apt to use IPv4 — container has no IPv6 route
+          sudo incus exec ci-debian -- sh -c \
+            'echo "Acquire::ForceIPv4 \"true\";" > /etc/apt/apt.conf.d/99force-ipv4'
+
+          # Inject and run incusbox-init (exec-injection path)
           sudo incus exec ci-debian -- sh -c 'cat > /tmp/incusbox-init' \
             < incusbox/incusbox-init
           sudo incus exec ci-debian -- chmod +x /tmp/incusbox-init
-          group="$(id -gn)"
-          sudo incus exec ci-debian -- sh /tmp/incusbox-init \
-            --user   "${user}" \
-            --uid    "${uid}" \
-            --gid    "${gid}" \
-            --group  "${group}" \
-            --home   "${HOME}" \
-            --shell  /bin/sh \
-            --container-name ci-debian \
-            --distro debian
+          sudo incus exec ci-debian -- sh /tmp/incusbox-init
 
       - name: Verify user exists inside container
         run: |
