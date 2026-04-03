@@ -32,6 +32,7 @@ Usage:
 
 Commands:
   create      Create a new incusbox container
+  build       Build a custom Incus image from a base + provisioning script
   enter       Enter an existing incusbox container
   list        List incusbox containers
   rm          Remove an incusbox container
@@ -121,6 +122,7 @@ shift
 case "${cmd}" in
     # Core commands
     create)    run_subcommand create    "$@" ;;
+    build)     run_subcommand build     "$@" ;;
     enter)     run_subcommand enter     "$@" ;;
     list|ls)   run_subcommand list      "$@" ;;
     rm|remove) run_subcommand rm        "$@" ;;
