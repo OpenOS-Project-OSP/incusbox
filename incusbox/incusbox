@@ -51,6 +51,7 @@ Commands:
   fleet           Multi-container orchestration (start-all, stop-all, backup-all)
   monitor         Show container resource usage and stats
   net             Manage network port forwarding (proxy devices)
+  usb             Manage USB device passthrough
   cloud-sync      Sync backups to cloud storage via rclone
 
   template        List and inspect container creation templates
@@ -131,6 +132,7 @@ case "${cmd}" in
     fleet)          run_subcommand fleet          "$@" ;;
     monitor)        run_subcommand monitor        "$@" ;;
     net)            run_subcommand net            "$@" ;;
+    usb)            run_subcommand usb            "$@" ;;
     cloud-sync)     run_subcommand cloud-sync     "$@" ;;
 
     # Declarative config
