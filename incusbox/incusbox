@@ -43,15 +43,22 @@ Commands:
   snapshot        Create, list, restore, delete, and auto-schedule snapshots
   console         Attach to a container console (serial/VGA)
   backup          Export a container to a portable archive
+  backup-list     List local backup archives
+  backup-delete   Delete a local backup archive
   restore         Import a container from a backup archive
   publish         Publish a container as a reusable Incus image
   import          Import an Incus image from a file
   fleet           Multi-container orchestration (start-all, stop-all, backup-all)
   monitor         Show container resource usage and stats
+  net             Manage network port forwarding (proxy devices)
+  usb             Manage USB device passthrough
+  gpu             Manage GPU passthrough
   cloud-sync      Sync backups to cloud storage via rclone
 
+  template        List and inspect container creation templates
   assemble        Create/update containers from a declarative YAML file
   setup-rootless  Guided setup for rootless incusbox via incus-user
+  update          Check for and install incusbox updates
   doctor          Check prerequisites and runtime environment
 
   version     Show version
@@ -118,15 +125,22 @@ case "${cmd}" in
     snapshot)       run_subcommand snapshot       "$@" ;;
     console)        run_subcommand console        "$@" ;;
     backup)         run_subcommand backup         "$@" ;;
+    backup-list)    run_subcommand backup-list    "$@" ;;
+    backup-delete)  run_subcommand backup-delete  "$@" ;;
     restore)        run_subcommand restore        "$@" ;;
     publish)        run_subcommand publish        "$@" ;;
     import)         run_subcommand import         "$@" ;;
     fleet)          run_subcommand fleet          "$@" ;;
     monitor)        run_subcommand monitor        "$@" ;;
+    net)            run_subcommand net            "$@" ;;
+    usb)            run_subcommand usb            "$@" ;;
+    gpu)            run_subcommand gpu            "$@" ;;
     cloud-sync)     run_subcommand cloud-sync     "$@" ;;
 
     # Declarative config
+    template)       run_subcommand template       "$@" ;;
     assemble)       run_subcommand assemble       "$@" ;;
+    update)         run_subcommand update         "$@" ;;
     setup-rootless) run_subcommand setup-rootless "$@" ;;
 
     # In-container commands (also callable from host for scripting)

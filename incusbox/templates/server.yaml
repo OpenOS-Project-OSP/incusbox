@@ -1,0 +1,11 @@
+# incusbox template: server
+# Server container with higher resources, init system, and isolated network.
+description: "Server container with more resources and isolated network namespace"
+
+resources:
+  cpu: 8
+  memory: 8GiB
+
+image: images:debian/12
+init: true
+unshare_netns: true

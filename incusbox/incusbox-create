@@ -37,6 +37,7 @@ storage_driver=""        # zfs | btrfs | dir  (detected from pool)
 storage_dataset=""       # ZFS dataset prefix (e.g. tank/incusbox)
 btrfs_compress="zstd"    # compression algo for btrfs subvolumes
 
+template=""
 init=0
 nvidia=0
 rootful=0
@@ -64,6 +65,7 @@ Usage:
   incusbox create [OPTIONS] [NAME]
 
 Options:
+      --template NAME        Apply a named template (sets image, cpu, memory defaults)
   -i, --image IMAGE          Image to use (OCI or Incus). Default: ${container_image_default}
   -n, --name NAME            Container name. Default: ${container_name_default}
       --hostname HOST        Hostname inside container. Default: host hostname
@@ -98,6 +100,7 @@ EOF
 # ── argument parsing ──────────────────────────────────────────────────────────
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --template)            template="$2";                     shift 2 ;;
         -i|--image)            container_image="$2";              shift 2 ;;
         -n|--name)             container_name="$2";               shift 2 ;;
         --hostname)            container_hostname="$2";           shift 2 ;;
@@ -131,6 +134,48 @@ while [ "$#" -gt 0 ]; do
         *)  container_name="$1"; shift ;;
     esac
 done
+
+# ── template application (before defaults, so CLI flags override) ─────────────
+if [ -n "${template}" ]; then
+    _script_dir="$(cd "$(dirname "$0")" && pwd)"
+    _tpl_dir="${INCUSBOX_TEMPLATES_DIR:-}"
+    [ -z "${_tpl_dir}" ] && _tpl_dir="${_script_dir}/templates"
+    [ -d "${_tpl_dir}" ] || _tpl_dir="/usr/share/incusbox/templates"
+    _tpl_file="${_tpl_dir}/${template}.yaml"
+    [ -f "${_tpl_file}" ] || die "Template not found: ${template} (looked in ${_tpl_dir})"
+
+    _tpl_get() { grep "^${1}:" "${_tpl_file}" | head -1 | sed "s/^${1}:[[:space:]]*//" | tr -d '"'; }
+    _tpl_nested() {
+        local _sec="$1" _key="$2" _in=false _v=""
+        while IFS= read -r _l; do
+            printf '%s\n' "${_l}" | grep -q "^${_sec}:" && { _in=true; continue; }
+            ${_in} && printf '%s\n' "${_l}" | grep -qE "^[a-z]" && break
+            if ${_in}; then
+                local _t; _t=$(printf '%s\n' "${_l}" | sed 's/^[[:space:]]*//')
+                printf '%s\n' "${_t}" | grep -q "^${_key}:" && {
+                    _v=$(printf '%s\n' "${_t}" | sed "s/^${_key}:[[:space:]]*//" | tr -d '"'); break; }
+            fi
+        done < "${_tpl_file}"
+        printf '%s' "${_v}"
+    }
+
+    _tpl_image=$(_tpl_get "image")
+    _tpl_cpu=$(_tpl_nested "resources" "cpu")
+    _tpl_mem=$(_tpl_nested "resources" "memory")
+    _tpl_init=$(_tpl_get "init")
+    _tpl_nvidia=$(_tpl_get "nvidia")
+    _tpl_unshare_netns=$(_tpl_get "unshare_netns")
+
+    # Apply only if the user hasn't already set the value via CLI flag
+    [ -z "${container_image}" ] && [ -n "${_tpl_image}" ]       && container_image="${_tpl_image}"
+    [ -n "${_tpl_cpu}" ]   && container_manager_additional_flags="${container_manager_additional_flags} --config limits.cpu=${_tpl_cpu}"
+    [ -n "${_tpl_mem}" ]   && container_manager_additional_flags="${container_manager_additional_flags} --config limits.memory=${_tpl_mem}"
+    [ "${_tpl_init}" = "true" ]           && init=1
+    [ "${_tpl_nvidia}" = "true" ]         && nvidia=1
+    [ "${_tpl_unshare_netns}" = "true" ]  && unshare_netns=1
+
+    log "Applying template '${template}'"
+fi
 
 [ -z "${container_image}" ] && container_image="${container_image_default}"
 [ -z "${container_name}" ]  && container_name="${container_name_default}"

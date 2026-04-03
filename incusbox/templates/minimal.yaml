@@ -1,0 +1,9 @@
+# incusbox template: minimal
+# Bare-bones container for testing or lightweight tasks.
+description: "Minimal container for testing with low resource usage"
+
+resources:
+  cpu: 1
+  memory: 512MiB
+
+image: images:alpine/3.20

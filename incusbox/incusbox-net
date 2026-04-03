@@ -1,0 +1,165 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-only
+# incusbox-net: manage network port forwarding for incusbox containers.
+
+set -euo pipefail
+
+# ── shared library ────────────────────────────────────────────────────────────
+_lib="$(cd "$(dirname "$0")" && pwd)/lib.sh"
+[ -f "${_lib}" ] || _lib="/usr/share/incusbox/lib.sh"
+# shellcheck source=lib.sh disable=SC1091
+. "${_lib}"
+
+resolve_incus
+
+show_help() {
+    cat <<EOF
+incusbox-net — manage network port forwarding for containers
+
+Usage:
+  incusbox-net forward  NAME HOST_PORT [CONTAINER_PORT] [--proto tcp|udp]
+  incusbox-net unforward NAME PROXY_NAME
+  incusbox-net list     NAME
+  incusbox-net status   NAME
+
+Subcommands:
+  forward     Add a proxy device to forward HOST_PORT → CONTAINER_PORT.
+              CONTAINER_PORT defaults to HOST_PORT when omitted.
+  unforward   Remove a named proxy device.
+  list        List all proxy (port-forward) devices on a container.
+  status      Show network interfaces and proxy devices.
+
+Options:
+  --proto tcp|udp   Protocol (default: tcp)
+  --listen ADDR     Listen address (default: 0.0.0.0)
+  -h, --help        Show this help
+
+Examples:
+  incusbox net forward  mybox 8080
+  incusbox net forward  mybox 8080 80 --proto tcp
+  incusbox net list     mybox
+  incusbox net unforward mybox fwd-8080
+  incusbox net status   mybox
+EOF
+}
+
+# ── forward ───────────────────────────────────────────────────────────────────
+
+cmd_forward() {
+    local name="$1"
+    local host_port="$2"
+    [ -z "${name}" ] || [ -z "${host_port}" ] && { show_help; exit 1; }
+    shift 2
+
+    local container_port="${host_port}"
+    local proto="tcp"
+    local listen_addr="0.0.0.0"
+    local proxy_name=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --proto)  proto="$2";        shift 2 ;;
+            --listen) listen_addr="$2";  shift 2 ;;
+            --name)   proxy_name="$2";   shift 2 ;;
+            -*)       die "Unknown option: $1" ;;
+            *)        container_port="$1"; shift ;;
+        esac
+    done
+
+    [ -z "${proxy_name}" ] && proxy_name="fwd-${host_port}"
+    require_incus
+
+    log "Adding port forward: ${listen_addr}:${host_port} → container:${container_port} (${proto})"
+    ${INCUS} config device add "${name}" "${proxy_name}" proxy \
+        "listen=${proto}:${listen_addr}:${host_port}" \
+        "connect=${proto}:127.0.0.1:${container_port}"
+    log "Port forward added: ${proxy_name}"
+    log "  Host    : ${listen_addr}:${host_port}"
+    log "  Container: 127.0.0.1:${container_port}"
+}
+
+# ── unforward ─────────────────────────────────────────────────────────────────
+
+cmd_unforward() {
+    local name="$1"
+    local proxy_name="$2"
+    [ -z "${name}" ] || [ -z "${proxy_name}" ] && { show_help; exit 1; }
+    require_incus
+
+    ${INCUS} config device remove "${name}" "${proxy_name}"
+    log "Removed port forward: ${proxy_name}"
+}
+
+# ── list ──────────────────────────────────────────────────────────────────────
+
+cmd_list() {
+    local name="$1"
+    [ -z "${name}" ] && { show_help; exit 1; }
+    require_incus
+
+    log "Port forwards: ${name}"
+    echo ""
+    printf "  %-20s %-30s %s\n" "DEVICE" "LISTEN" "CONNECT"
+    printf "  %-20s %-30s %s\n" "------" "------" "-------"
+
+    local found=false
+    while IFS= read -r line; do
+        local dev
+        dev=$(printf '%s\n' "${line}" | awk '{print $1}')
+        local listen connect
+        listen=$(${INCUS} config device get "${name}" "${dev}" listen 2>/dev/null || echo "")
+        connect=$(${INCUS} config device get "${name}" "${dev}" connect 2>/dev/null || echo "")
+        [ -n "${listen}" ] || continue
+        found=true
+        printf "  %-20s %-30s %s\n" "${dev}" "${listen}" "${connect}"
+    done < <(${INCUS} config device list "${name}" 2>/dev/null \
+             | grep "proxy" | awk '{print $1}' || true)
+
+    if ! ${found}; then
+        info "  No port forwards configured"
+    fi
+}
+
+# ── status ────────────────────────────────────────────────────────────────────
+
+cmd_status() {
+    local name="$1"
+    [ -z "${name}" ] && { show_help; exit 1; }
+    require_incus
+
+    log "Network status: ${name}"
+    echo ""
+
+    local info_out
+    info_out=$(${INCUS} info "${name}" 2>/dev/null)
+
+    # Network interfaces from incus info
+    printf '%s\n' "${info_out}" | awk '
+        /^Network usage:/ { in_net=1; next }
+        in_net && /^[A-Z]/ { in_net=0 }
+        in_net { print "  " $0 }
+    '
+
+    echo ""
+    log "Proxy devices:"
+    ${INCUS} config device show "${name}" 2>/dev/null \
+    | awk '/type: proxy/{found=1} found{print "  " $0; if(/^$/)found=0}' \
+    || info "  None"
+}
+
+# ── dispatch ──────────────────────────────────────────────────────────────────
+
+[ "$#" -eq 0 ] && { show_help; exit 0; }
+
+subcmd="$1"; shift
+case "${subcmd}" in
+    forward|fwd)        cmd_forward   "$@" ;;
+    unforward|unfwd|rm) cmd_unforward "$@" ;;
+    list|ls)            cmd_list      "$@" ;;
+    status)             cmd_status    "$@" ;;
+    -h|--help|help)     show_help ;;
+    *)
+        printf >&2 "incusbox-net: unknown subcommand '%s'\n" "${subcmd}"
+        printf >&2 "Run 'incusbox-net --help' for usage.\n"
+        exit 1 ;;
+esac

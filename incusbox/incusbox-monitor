@@ -24,6 +24,8 @@ Subcommands:
   stats  [NAME]   CPU, memory, disk, and network stats
   top             Live overview of all containers
   disk   [NAME]   Disk usage breakdown
+  uptime [NAME]   Container uptime and creation history
+  health          Host-level health check (Incus daemon, KVM, memory, disk)
 
 Options:
   -h, --help      Show this help
@@ -33,6 +35,8 @@ Examples:
   incusbox monitor stats  mybox
   incusbox monitor top
   incusbox monitor disk   mybox
+  incusbox monitor uptime mybox
+  incusbox monitor health
 EOF
 }
 
@@ -154,6 +158,69 @@ cmd_disk() {
     [ -n "${disk_usage}" ] && printf '%s\n' "${disk_usage}" | sed 's/^/  /'
 }
 
+cmd_uptime() {
+    local name="$1"
+    [ -z "${name}" ] && { show_help; exit 1; }
+    require_incus
+    ${INCUS} info "${name}" >/dev/null 2>&1 || die "Container '${name}' not found"
+
+    local info_out status created last_used
+    info_out=$(${INCUS} info "${name}" 2>/dev/null)
+    status=$(printf '%s\n' "${info_out}"    | grep "^Status:"   | awk '{print $2}')
+    created=$(printf '%s\n' "${info_out}"   | grep "^Created:"  | sed 's/^Created:[[:space:]]*//')
+    last_used=$(printf '%s\n' "${info_out}" | grep "^Last Used:" | sed 's/^Last Used:[[:space:]]*//')
+
+    log "Uptime: ${name}"
+    echo ""
+    echo "  Created   : ${created:-unknown}"
+    echo "  Last used : ${last_used:-unknown}"
+    echo "  Status    : ${status:-unknown}"
+
+    local snaps
+    snaps=$(printf '%s\n' "${info_out}" | grep -A1 "^Snapshots:" | tail -1 || true)
+    if [ -n "${snaps}" ] && ! printf '%s\n' "${snaps}" | grep -q "^Snapshots:"; then
+        echo ""
+        info "Recent snapshots:"
+        printf '%s\n' "${info_out}" | sed -n '/^Snapshots:/,/^$/p' | tail -n +2 | head -5 | sed 's/^/  /'
+    fi
+}
+
+cmd_health() {
+    log "incusbox System Health"
+    echo ""
+
+    if ${INCUS} info >/dev/null 2>&1; then
+        ok "Incus daemon: reachable"
+    else
+        warn "Incus daemon: not reachable"
+    fi
+
+    if [ -e /dev/kvm ]; then
+        ok "KVM: available"
+    else
+        info "KVM: /dev/kvm not found (containers only, no VMs)"
+    fi
+
+    local pools networks ct_total ct_running
+    pools=$(${INCUS} storage list --format csv 2>/dev/null | wc -l || echo "0")
+    networks=$(${INCUS} network list --format csv 2>/dev/null | wc -l || echo "0")
+    ct_total=$(${INCUS} list --format csv -c t 2>/dev/null | grep -c "container" || echo "0")
+    ct_running=$(${INCUS} list --format csv -c s,t 2>/dev/null | grep "RUNNING,container" | wc -l || echo "0")
+    echo "  Storage pools : ${pools}"
+    echo "  Networks      : ${networks}"
+    echo "  Containers    : ${ct_running} running / ${ct_total} total"
+
+    echo ""
+    info "Host disk:"
+    df -h / 2>/dev/null | tail -1 | awk '{printf "  Used: %s / %s (%s)\n", $3, $2, $5}'
+
+    info "Host memory:"
+    free -h 2>/dev/null | grep "^Mem:" | awk '{printf "  Used: %s / %s\n", $3, $2}' || true
+
+    echo ""
+    ok "Health check complete"
+}
+
 # ── dispatch ──────────────────────────────────────────────────────────────────
 
 [ "$#" -eq 0 ] && { show_help; exit 0; }
@@ -164,6 +231,8 @@ case "${subcmd}" in
     stats)          cmd_stats  "$@" ;;
     top)            cmd_top ;;
     disk)           cmd_disk   "$@" ;;
+    uptime)         cmd_uptime "$@" ;;
+    health)         cmd_health ;;
     -h|--help|help) show_help ;;
     # Bare name with no subcommand → status
     *)              cmd_status "${subcmd}" ;;

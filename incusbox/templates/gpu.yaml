@@ -1,0 +1,11 @@
+# incusbox template: gpu
+# Container with NVIDIA GPU passthrough enabled.
+description: "Container with NVIDIA GPU passthrough for compute workloads"
+
+resources:
+  cpu: 8
+  memory: 16GiB
+
+image: images:ubuntu/24.04
+init: true
+nvidia: true

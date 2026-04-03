@@ -1,0 +1,10 @@
+# incusbox template: dev
+# Development container with balanced resources and init system.
+description: "Development container with balanced resources and systemd init"
+
+resources:
+  cpu: 4
+  memory: 4GiB
+
+image: images:ubuntu/24.04
+init: true

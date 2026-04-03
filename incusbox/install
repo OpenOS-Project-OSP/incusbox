@@ -95,13 +95,20 @@ incusbox-snapshot
 incusbox-snapshot-auto
 incusbox-console
 incusbox-backup
+incusbox-backup-list
+incusbox-backup-delete
 incusbox-restore
 incusbox-publish
 incusbox-import
 incusbox-fleet
 incusbox-monitor
+incusbox-net
+incusbox-usb
+incusbox-gpu
 incusbox-cloud-sync
+incusbox-template
 incusbox-assemble
+incusbox-update
 incusbox-setup-rootless
 "
 
@@ -175,6 +182,15 @@ info "Installed ${share_dir}/incusbox-init"
 
 # lib.sh is already installed above; the share_dir copy is the fallback used
 # when scripts are invoked from a PATH location other than their source dir.
+
+# ── install templates ─────────────────────────────────────────────────────────
+templates_dir="${share_dir}/templates"
+install -d "${templates_dir}"
+for tpl_yaml in "${src_dir}"/templates/*.yaml; do
+    [ -f "${tpl_yaml}" ] || continue
+    install -m 0644 "${tpl_yaml}" "${templates_dir}/"
+    info "Installed template $(basename "${tpl_yaml}")"
+done
 
 # ── install profiles ──────────────────────────────────────────────────────────
 for profile_yaml in "${src_dir}"/profiles/*.yaml; do
