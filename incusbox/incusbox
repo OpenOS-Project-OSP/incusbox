@@ -55,6 +55,7 @@ Commands:
   template        List and inspect container creation templates
   assemble        Create/update containers from a declarative YAML file
   setup-rootless  Guided setup for rootless incusbox via incus-user
+  update          Check for and install incusbox updates
   doctor          Check prerequisites and runtime environment
 
   version     Show version
@@ -133,6 +134,7 @@ case "${cmd}" in
     # Declarative config
     template)       run_subcommand template       "$@" ;;
     assemble)       run_subcommand assemble       "$@" ;;
+    update)         run_subcommand update         "$@" ;;
     setup-rootless) run_subcommand setup-rootless "$@" ;;
 
     # In-container commands (also callable from host for scripting)
