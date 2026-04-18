@@ -29,7 +29,7 @@ keeping the same user-facing workflow.
 ### System-wide (requires root)
 
 ```sh
-git clone https://github.com/Interested-Deving-1896/incusbox
+git clone https://gitlab.com/OSPF1896/incusbox
 cd incusbox/incusbox
 sudo ./install
 ```
@@ -37,7 +37,7 @@ sudo ./install
 ### User install (no root required)
 
 ```sh
-git clone https://github.com/Interested-Deving-1896/incusbox
+git clone https://gitlab.com/OSPF1896/incusbox
 cd incusbox/incusbox
 ./install --user
 # Add ~/.local/bin to PATH if not already present
