@@ -10,7 +10,7 @@ _lib="$(cd "$(dirname "$0")" && pwd)/lib.sh"
 # shellcheck source=lib.sh disable=SC1091
 . "${_lib}"
 
-GITHUB_REPO="Interested-Deving-1896/incusbox"
+GITHUB_REPO="OSPF1896/incusbox"
 GITHUB_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
 _script_dir="$(cd "$(dirname "$0")" && pwd)"
